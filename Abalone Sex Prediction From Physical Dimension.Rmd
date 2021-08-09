@@ -1,0 +1,210 @@
+---
+title: "Abalone Sex Prediction From Phyical Dimensions"
+author:
+- "Mohammad Ahsan Ullah"
+output: html_notebook
+---
+
+#### Libraries required for the analysis
+
+```{r warning=TRUE}
+library(GGally)
+library(dplyr)
+library(readr)
+library(purrr)
+library(CCA)
+library(CCP)
+library(nnet)
+library(heplots)
+library(MASS)
+library(e1071)
+```
+
+***
+Exploratory analysis of the data.
+
+```{r echo=FALSE, fig.height=10, fig.width=14, message=FALSE}
+abalone <- read_csv("abalone.csv")
+names(abalone)<-make.names(names(abalone),unique = TRUE) # easier to refer col names
+str(abalone)
+summary(abalone)
+GGally::ggpairs(abalone, aes(colour=Sex, alpha = 0.5), legend = 1,
+                upper = list(combo = wrap("box_no_facet", alpha=0.5),
+                             continuous = wrap("cor", size=4)))+ theme(legend.position = "top") 
+```
+
+There are 4177 rows and 9 columns.Sample distribution are similar for femail and infants whereas male samples are slightly higher. Given abalone dataset shows possible distinguishable characteristics of length, height, weight and rings measurements for Infants.There's no significant differences in size, weight and numbers of rings between male and female abalones. Also noticed dataset seems have measurement/input error in height. Height has 0 as input value and outliers which can be observed from pairwise/box plots. It is rational to remove those inputs to build the model.
+
+It is also clear from the plots that weights of abalone shows somewhat exponential increase with increase of physical measurements. So it is worth to do transformation of the data for the analysis of this assignment. 
+
+Clean and transform data:
+
+```{r echo=TRUE, fig.height=8, fig.width=10, message=FALSE}
+(outliers.h <- boxplot(abalone$Height, plot=FALSE)$out)# outlier values of height
+
+abalone.ct <- abalone %>% dplyr::select(-c(Rings,Whole.weight,Shell.weight))%>% 
+  filter(! Height %in% c(0,2,3,103,226)) %>%  mutate(`sqrt.Shucked.weight`=(`Shucked.weight`)^(1/2),
+                                                 `sqrt.Viscera.weight`=(`Viscera.weight`)^(1/2), .keep="unused")
+dim(abalone.ct)
+
+GGally::ggpairs(abalone.ct, aes(colour=Sex, alpha = 0.5), legend = 1,
+        upper = list(combo = wrap("box_no_facet", alpha=0.5),
+                     continuous = wrap("cor", size=4)))+ theme(legend.position = "top") 
+```
+Total 7 records removed from the dataset. After couple of transformation option check (log, 1/4, 1/8), square root of Shucked and Viscera weight is done as of the part of the transformation.With this transformation the relationship between weights measurements shows somewhat linear relationship with physical measurement.  
+
+
+***
+#### Question 1: Sustainability
+
+Classification performance will be compared between different models to predict sex from exterior measurement.  Here, multinomial regression, LDA and SVM performance will be compared.
+
+```{r echo=FALSE}
+abalone.ct.lm <- lm(cbind(Length, Diameter, Height)~Sex, data=abalone.ct)
+#summary(abaloneM.mlm)
+heplots::boxM(abaloneM.mlm) # Run the boxM test:
+```
+
+boxM test result shows that physical parameters shows strong relationship between different sex of abalone.
+
+
+```{r echo=FALSE, message=FALSE}
+abalone.ct$Sex <- factor(abalone.ct$Sex)
+abalone.ct$Target <- relevel(abalone.ct$Sex, ref=2) # base classification infant
+multinom_model <- nnet::multinom(Target~Length+Diameter+Height, data=abalone.ct)
+#summary(multinom_model)
+z <- summary(multinom_model)$coefficients/summary(multinom_model)$standard.errors
+(p <- (1 - pnorm(abs(z), 0, 1)) * 2) # 2 tailed z test
+
+multinom.CM <- table(Truth = abalone.ct$Target, Prediction = predict(multinom_model))
+print(multinom.CM)
+(1-sum(diag(multinom.CM))/sum(multinom.CM))# misclarification error
+(precision <- diag(multinom.CM) / colSums(multinom.CM))
+(recall <- diag(multinom.CM) / rowSums(multinom.CM))
+```
+
+Multinomial model has 47.6% misclassification error rate. This model is somewhat good in identifying infant (percision 65.5% and recall 71.5%) whereas poor in predicting male and female abalone.All the parameters of the exterior measurement are important.
+
+
+```{r}
+(abalon.ct.qda.CM <- table(Truth=abalone.ct$Sex, Prediction=predict(MASS::qda(Sex~Length+Diameter+ Height,data=abalone.ct))$class))
+1-sum(diag(abalon.ct.qda.CM))/sum(abalon.ct.qda.CM)
+(precision <- diag(abalon.ct.qda.CM) / colSums(abalon.ct.qda.CM))
+(recall <- diag(abalon.ct.qda.CM) / rowSums(abalon.ct.qda.CM))
+```
+
+Quadratic discriminant model has 47.8% misclassification error rate which is slightly higher than multinomial model. QDA model is also good in identifying infant (precision 65.5% and recall 72.5%) whereas poor in predicting male and female abalone.
+
+
+```{r}
+tuned.svm <- e1071::tune.svm(Target~Length+Diameter+Height,data=abalone.ct,kernel="radial", gamma = 10^(-1:1), cost = 10^(-1:1))
+tuned.svm$best.model
+```
+
+SVM best parameters are gamma = 1 and cost = 10 will be used to generate the model.
+
+```{r}
+abalone.ct.svm.radial <- e1071::svm(Target~Length+Diameter+Height,data=abalone.ct,gamma = 1, cost = 10)
+#summary(abalone.ct.svm.radial)
+(abalone.ct.svm.CM <- table(Truth = abalone.ct$Target,Prediction = fitted(abalone.ct.svm.radial)))
+1-sum(diag(abalone.ct.svm.CM))/sum(abalone.ct.svm.CM)
+(precision <- diag(abalone.ct.svm.CM) / colSums(abalone.ct.svm.CM))
+(recall <- diag(abalone.ct.svm.CM) / rowSums(abalone.ct.svm.CM))
+```
+
+Support vector model has 45.7% misclassification error rate which is lower than multinomial & QDA model. SVM is good in identifying infant (precision 63.2% and recall 75.9%) whereas poor in predicting male and female abalone.
+
+Based on comparison between different models overall misclassification error rate is low for SVM. All the modes shows similar performance in terms of Infant identification. None are good in predicting male or female as precision/recall scores are poor. 
+
+***
+####Question 2: Profitability
+
+MANOVA test can be done to check the feasibility of measuring Shucked and Viscera weight from physical measurements.
+
+```{r}
+class(abalone.ct.mlm <- lm(cbind(sqrt.Shucked.weight,sqrt.Viscera.weight)~Length+Diameter+Height, data = abalone.ct))
+#summary(abaloneM.mlm)
+coef(abalone.ct.mlm) # Now a p by k matrix.
+estVar(abalone.ct.mlm) # Now a p by p matrix.
+anova(abalone.ct.mlm)
+anova(abalone.ct.mlm, test="Wilks")
+```
+Based on test results (Pallai and Wilk's test) it can be concluded that all parameters of physical measurements are important in predicting weight measurements.
+
+```{r echo=TRUE, message=FALSE}
+X <- dplyr::select(abalone.ct, -1)
+GGally::ggpairs(X)
+MVN::mvn(X)
+```
+
+Normality test failed of the dataset. However they are close to normal distribution and can be considered normal for the sake of simplicity.
+
+```{r}
+mu11 <- colMeans(X)[4:5]
+mu22 <- colMeans(X)[1:3]
+sigma11 <- cov(X)[c(4:5),c(4:5)]
+sigma22 <- cov(X)[c(1:3),c(1:3)]
+sigma12 <- cov(X)[c(4:5),c(1:3)]
+
+mu.LDH <- function(L,D,H){
+  input.v <- c(L,D,H)
+  mu.LDH <- mu11+sigma12%*%solve(sigma22)%*%(input.v-mu22)
+}
+sigma.LDH <- sigma11-sigma12%*%solve(sigma22)%*%t(sigma12)
+```
+
+Using multivariate normal distribution rule, mu.LDH and sigma.LDH will provide joint distribution of the square root of shucked and viscera weight of abalone.
+
+```{r echo=TRUE}
+class(abalone.mlm2 <- lm(cbind(Shucked.weight,Viscera.weight)~ Length+Diameter+Height, data = (abalone)))
+summary(abalone.mlm2)
+coef(abalone.mlm2) # Now a p by k matrix.
+estVar(abalone.mlm2) # Now a p by p matrix.
+anova(abalone.mlm2)
+anova(abalone.mlm2, test="Wilks")
+
+class(abalone.ct.mlm2 <- lm(cbind(sqrt.Shucked.weight,sqrt.Viscera.weight)~ Length+Diameter+Height, data = (abalone.ct)))
+summary(abalone.ct.mlm2)
+coef(abalone.ct.mlm2) # Now a p by k matrix.
+estVar(abalone.ct.mlm2) # Now a p by p matrix.
+anova(abalone.ct.mlm2)
+anova(abalone.ct.mlm2, test="Wilks")
+```
+
+Linear model with squre root of shucked and viscera is better than without transformation. R-squared increased  almost 10% with the transformation. Pillai and Wilks test confirms that physical parameters are significant.
+
+```{r}
+abalone.S <- function(L,D,H,Vshukcked,Vviscera){
+  Xshukcked <- (coef(abalone.ct.mlm2)[,1]%*%c(1,L,D,H))^2
+  Xviscera <- (coef(abalone.ct.mlm2)[,2]%*%c(1,L,D,H))^2
+  Vshukcked*Xshukcked + Vviscera*Xviscera
+}
+```
+Using the best linear model above fucntion will provide the estimated price of abalone using physical parameter and unit price as input value.
+
+```{r}
+contrastCI <- function(l, n, m, S, CL=.90){
+  p <- length(m)
+  c(crossprod(l,m)) + c(-1,+1)* c(sqrt(p*(n-1)/(n-p)*qf(CL, p, n-p) * t(l)%*%S%*%l/n))
+}
+
+e <- function(i, n) c(numeric(i-1), 1, numeric(n-i))
+
+abalone.S.range <- function(L,D,H,Vshukcked,Vviscera){
+  n <- nrow(abalone.ct) # sample size
+  p <- 2 # number of variables shucked and viscera
+  m <- mu.LDH(L,D,H) # sample mean
+  S <- sigma.LDH # S
+  Sinv <- solve(S) # S^-1
+  CCIs <- sapply(1:p, function(i) contrastCI(e(i,p), n, m, S))
+  CI1 <- CCIs[,1] # shucked
+  CI2 <- CCIs[,2] # viscera
+  lower.value <- Vshukcked*(CI1[1])^2 + Vviscera*(CI2[1])^2
+  upper.value <- Vshukcked*(CI1[2])^2 + Vviscera*(CI2[2])^2
+  output <-list(lower.value,upper.value)
+  return(output)
+}
+
+```
+
+Above function will provide lower and upper range of abalone price using conditional distribution of shucked, viscera weight and input of physical parameter and unit price input. Here simultaneous interval method is used which is bit relaxed and can be used for this purpose.
